@@ -1,0 +1,42 @@
+{
+  "name": "worklog",
+  "version": "0.1.0",
+  "description": "CLI that automates a Git-based SFTP sync workflow and generates daily work reports",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "worklog": "./dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "cli",
+    "git",
+    "worklog",
+    "report",
+    "productivity",
+    "sftp"
+  ],
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "commander": "^12.1.0",
+    "ora": "^8.2.0",
+    "simple-git": "^3.27.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
