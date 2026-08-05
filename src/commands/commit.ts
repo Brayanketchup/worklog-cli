@@ -1,4 +1,4 @@
-import path from 'node:path';
+import { toRepoRelative } from '../utils/paths.js';
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import { loadConfig } from '../config/config.js';
@@ -42,14 +42,7 @@ async function commitAction(files: string[], options: CommitOptions): Promise<vo
   }
 
   if (files.length > 0) {
-    const rels = files.map((file) => {
-      const abs = path.resolve(process.cwd(), file);
-      const rel = path.relative(root, abs).split(path.sep).join('/');
-      if (rel.startsWith('..')) {
-        throw new WorklogError(`${file} is outside the repository (${root}).`);
-      }
-      return rel;
-    });
+    const rels = files.map((file) => toRepoRelative(file, root));
     await git.add(rels);
   } else if (options.all) {
     await git.addAll();
