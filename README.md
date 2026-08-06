@@ -13,6 +13,7 @@ Built with **TypeScript** and **Node.js**, designed to work with **any Git repos
 - [Command Reference](#command-reference)
   - [worklog sync](#worklog-sync-files)
   - [worklog commit](#worklog-commit-files--m-message)
+  - [worklog discard](#worklog-discard-files)
   - [worklog report](#worklog-report)
   - [worklog today](#worklog-today)
   - [worklog status](#worklog-status)
@@ -37,7 +38,10 @@ The tool assumes two local branches:
 | `main` | A mirror of the server state. Every file downloaded from SFTP is committed here as a production snapshot (`SFTP sync: update account.cgi`). It is a *timeline of server versions*, not a deployment branch. Newer downloads overwrite older working copies; Git history preserves every previous version. |
 | `work` | Your development branch. Every feature, fix, and enhancement lives here. It never loses your commits — server snapshots arrive via normal Git merges. |
 
-When a teammate changes a file on the server, you download it via SFTP, overwrite your local copy, and run one command. WorkLog commits the snapshot to `main` and merges it into `work` so you keep developing against the newest server version.
+When a teammate changes a file on the server, you download it via SFTP and overwrite your local copy.
+
+- Use `worklog sync` for a normal server import. It records the snapshot on `main` and merges it into `work`, preserving your development changes.
+- Use `worklog discard` when the file is already tracked, your committed changes are no longer wanted, and the newly downloaded server copy must replace the current version on `work`.
 
 ## Requirements
 
@@ -134,6 +138,50 @@ worklog commit -m "Commit whatever is already staged"
 
 ---
 
+### `worklog discard <files...>`
+
+Accept newly downloaded SFTP file(s) as authoritative and replace their existing versions on `work`.
+
+Use this when:
+
+1. The file is already tracked by WorkLog.
+2. You previously committed changes to it on `work`.
+3. Those changes are no longer needed.
+4. You downloaded a fresh server copy over the local file.
+5. The downloaded copy must replace your previous development version exactly.
+
+```bash
+# First, download the current server copy over the local file.
+worklog discard uniprouniforms.com/up/catalog.cgi
+
+# Multiple already-tracked files are supported.
+worklog discard up/catalog.cgi up/account.cgi
+```
+
+**What it does, in order:**
+
+1. Requires the command to run from `work`.
+2. Reads all downloaded file contents into memory and validates every path before changing anything.
+3. Refuses files that are untracked or missing from `main`; new files must use `worklog sync`.
+4. Removes the downloaded target files from the working tree while their bytes remain safe in memory.
+5. Stashes any unrelated uncommitted work.
+6. Switches to `main` and records each downloaded file as the latest `SFTP sync: update <file>` snapshot.
+7. Switches to `work` and restores each target file from the new `main` snapshot.
+8. Creates a replacement commit on `work` when its previous content differed.
+9. Merges `main` into `work` and restores unrelated stashed changes.
+
+The previous development commits remain in Git history. Their code is no longer present in the current file, but the history is not rewritten or deleted.
+
+| Option | Effect |
+| --- | --- |
+| `-m, --message <message>` | Override the replacement commit message on `work`. The default is `Accept server version of <file>`. |
+
+**Important:** download the server copy first. `discard` treats the file currently on disk as the authoritative server version.
+
+Use `worklog sync` instead when importing a new file or when normal merging should preserve your development changes.
+
+---
+
 ### `worklog report`
 
 Generate a report of one day's work: development commits, files modified with line stats, production imports, and a summary.
@@ -164,7 +212,7 @@ worklog report -d 2026-07-15      # a specific day
 
 A quick dashboard for "where am I right now":
 
-```
+```text
 Today — 2026-07-16
   Branch:        work
   Working tree:  1 modified
@@ -220,6 +268,14 @@ worklog sync up/lib/modules/catalog/account.cgi
 vim up/lib/modules/catalog/brands.cgi
 worklog commit up/lib/modules/catalog/brands.cgi -m "Fix brand URL generation"
 
+# Later, your committed catalog.cgi changes are no longer needed.
+# Download the newest server copy over the local file, then:
+worklog discard up/catalog.cgi
+
+# catalog.cgi on main and work now contains the downloaded server version.
+# Begin the new work from that clean server copy:
+vim up/catalog.cgi
+
 # Check where things stand:
 worklog today
 
@@ -250,18 +306,21 @@ If anything fails mid-flight while changes are stashed, WorkLog tells you the st
 | `Merge produced conflicts` | Resolve the listed files, `git add` them, `git commit`. If WorkLog stashed changes, `git stash pop` afterwards. |
 | `You are on "X" but development commits belong on "work".` | `git checkout work` first, or pass `--any-branch` if you really mean it. |
 | `Nothing staged to commit.` | Pass file paths, use `--all`, or `git add` something first. |
+| `…is not already tracked on work.` | This command only replaces existing tracked files. Use `worklog sync <path>` for a new file. |
+| `…does not exist on main.` | There is no existing server snapshot for that file. Import it first with `worklog sync <path>`. |
+| `You are on "X" but discard must run from "work".` | Run `git checkout work`, then run `worklog discard` again. |
 | Stash didn't pop automatically | Run `git stash list` then `git stash pop` and resolve any conflicts; nothing is lost — the stash stays until popped successfully. |
 
 ## Architecture
 
-```
+```text
 src/
   index.ts        CLI entry point (commander)
-  commands/       One module per command (sync, commit, report, today, status)
+  commands/       One module per command (sync, commit, discard, report, today, status)
   git/            GitService — all Git access isolated behind one class (simple-git)
   report/         Report data collection + terminal/Markdown renderers
   config/         Config file loading with defaults
-  utils/          Logger, error type, date helpers
+  utils/          Logger, error type, date helpers, repo-relative path helper
   types/          Shared interfaces (CommitInfo, FileChange, ReportData)
 ```
 

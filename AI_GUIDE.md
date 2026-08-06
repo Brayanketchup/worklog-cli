@@ -9,7 +9,7 @@ WorkLog automates the user's Git workflow for a legacy web application whose sou
 **The user's repository model — memorize this:**
 
 - **`main`** = a local timeline of *server snapshots*. Every file the user downloads from SFTP gets committed here with the message prefix `SFTP sync:`. It is NOT a deployment branch and NOT where development happens. Newer downloads overwrite the working copy; Git history keeps every prior version.
-- **`work`** = the user's development branch. ALL of the user's own commits live here. It must never lose commits. Server snapshots flow into it via `git merge main` (which `worklog sync` performs automatically).
+- **`work`** = the user's development branch. ALL of the user's own commits live here. It must never lose commits. Server snapshots flow into it through normal Git merges.
 
 Branch names and the commit prefix are configurable per-repo via `worklog.config.json` (see §6) — check for that file before assuming defaults.
 
@@ -19,19 +19,19 @@ The tool lives at `C:\Users\brayan.martinez\Documents\brayann\worklog`.
 
 Preferred invocation (works if `npm link` was run there):
 
-```
+```text
 worklog <command> [args]
 ```
 
 If `worklog` is not on PATH, invoke the build directly:
 
-```
+```text
 node C:\Users\brayan.martinez\Documents\brayann\worklog\dist\index.js <command> [args]
 ```
 
 If `dist/` is missing or stale (source newer than build), rebuild first:
 
-```
+```text
 cd C:\Users\brayan.martinez\Documents\brayann\worklog
 npm install        # only if node_modules is missing
 npm run build
@@ -46,6 +46,7 @@ Exit codes: `0` success, `1` failure (an error line starting with `x` plus a hin
 | The user says… | Run |
 | --- | --- |
 | "I downloaded `account.cgi` from the server" / "another dev changed X, I pulled it via SFTP" / "import this file" | `worklog sync <path>` — after confirming the downloaded file has been copied over the local path |
+| "I downloaded an already-tracked file and want it to replace my committed changes" / "discard my changes and accept the server copy" / "make X exactly match the file I just downloaded" | `worklog discard <path>` — after confirming the downloaded server copy is already sitting at that path |
 | "commit my changes" / "commit these files as *message*" | `worklog commit <files...> -m "<message>"` |
 | "commit everything" | `worklog commit --all -m "<message>"` |
 | "what did I do today" / "generate my report" | `worklog report` |
@@ -58,12 +59,13 @@ Commit message style the user prefers (imperative, concise, no prefix):
 
 ## 4. Command Contracts
 
-### `worklog sync <files...>` — import SFTP downloads
+### `worklog sync <files...>` — import SFTP downloads normally
 
 Precondition: the downloaded file content is already sitting at the given path in the working tree (the user overwrites their local copy with the SFTP download *before* sync runs). If the user only tells you a file arrived but hasn't placed it, help them place it first — sync reads the file from disk.
 
 What it does (in order): reads content into memory → removes the downloaded copy from the working tree → auto-stashes any other uncommitted changes → checks out `main` → writes + stages + commits each file as `SFTP sync: update|add <basename>` (full path in commit body) → checks out `work` → merges `main` → restores the original branch → pops the stash.
 
+- Use this for new files and ordinary server updates where development changes should be preserved through the merge.
 - One commit **per file**; pass multiple files in one call freely.
 - A file identical to `main`'s latest version prints a `!` warning and is skipped — this is normal, not an error. Report it to the user as "already up to date".
 - `--no-restore` leaves the repo on `work` instead of the starting branch.
@@ -77,6 +79,31 @@ What it does (in order): reads content into memory → removes the downloaded co
 - File args → stages exactly those; `--all` → stages everything incl. new/deleted; no args and no `--all` → commits whatever is already staged.
 - "Nothing staged to commit." → stage something or pass `--all`.
 
+### `worklog discard <files...>` — accept downloaded server files as authoritative
+
+Preconditions:
+
+1. Run from the configured `work` branch.
+2. Each named file is already tracked on `work`.
+3. Each named file already exists in the configured snapshot branch.
+4. The freshly downloaded server content is already sitting at each named path.
+
+Use this when the user previously committed changes to an existing file, no longer wants those changes, and has downloaded the newest server copy over the local file. The current file bytes are authoritative.
+
+What it does (in order): reads and validates all named files before mutation → captures their bytes in memory → resets only those target paths so they do not enter the unrelated-work stash → stashes unrelated dirty content → checks out `main` → writes + stages + commits each downloaded file as `SFTP sync: update <basename>` when changed → checks out `work` → restores each target from the new `main` snapshot → commits each replacement as `Accept server version of <basename>` when changed → merges `main` into `work` → pops the unrelated-work stash.
+
+- This command is intentionally different from `sync`: it replaces the named file on `work` instead of preserving the old development content through a merge.
+- It refuses untracked files and files absent from `main`. Use `worklog sync <path>` for first-time imports.
+- It validates every argument before touching any file, so a bad later path does not partially process earlier paths.
+- It does not rewrite or delete history. The unwanted development commits remain recoverable in Git history, but their code is not present in the current file.
+- One snapshot commit per changed file on `main`; one replacement commit per differing file on `work`.
+- `-m, --message <message>` overrides the replacement commit message. For multiple files, the same supplied message is used for each replacement commit.
+- A target already matching the downloaded server version may produce no replacement commit; that is normal.
+
+**Never run `discard` before the server download is in place.** Doing so would treat the current local file as authoritative, even if it is not the server copy.
+
+**On merge conflict**: the repo is left on `work` mid-merge. Resolve the conflicts, run `git add <files> && git commit`, then run `git stash pop` if WorkLog reported that unrelated changes remain stashed.
+
 ### `worklog report [-d date] [--markdown] [-o file]` — day report
 
 Read-only; always safe. Development commits are computed as `main..work` (commits on `work` not on `main`) for the given date, excluding merges and `SFTP sync:` commits, so imports never inflate the user's work. Production imports come from that day's sync commits on `main`. When the user wants to *send* the report somewhere, generate with `--markdown` or `-o`.
@@ -87,12 +114,19 @@ Always safe to run. Run `worklog today` proactively before risky operations and 
 
 ## 5. Safety Rules for the AI
 
-1. **Never commit development work on `main`.** `main` is exclusively for `SFTP sync:` snapshot commits created by `worklog sync`.
+1. **Never commit development work on `main`.** `main` is exclusively for `SFTP sync:` snapshot commits created by `worklog sync` or `worklog discard`.
 2. **Never rebase, force-push, reset --hard, or rewrite history** on either branch. The whole system depends on append-only history. There is no remote, so a lost commit is lost forever.
-3. **Never delete or drop stashes.** If a sync run leaves a stash behind (its output says so), recover it with `git stash pop`, resolving conflicts if needed.
-4. **Don't "clean up" the working tree** (checkout/restore/clean) without asking — an uncommitted modified file may be an SFTP download the user hasn't synced yet. If you find unexplained modifications, ask whether they're server downloads (→ `worklog sync`) or the user's work (→ `worklog commit`).
-5. Verify outcomes after acting: after a sync, `git log --oneline -3 main` should show the new `SFTP sync:` commit and `worklog today` should show "up to date with main"; after a commit, `git log --oneline -1 work` should show the new message.
-6. If a command fails, read the printed hint — every WorkLog error includes its own recovery instruction.
+3. **Never delete or drop stashes.** If a command leaves a stash behind (its output says so), recover it with `git stash pop`, resolving conflicts if needed.
+4. **Do not clean up unexplained working-tree changes without asking.** A modified file may be:
+   - a normal SFTP download that should use `worklog sync`,
+   - an authoritative SFTP download that should use `worklog discard`, or
+   - the user's development work that should use `worklog commit`.
+5. **Never run `discard` on a file the user did not name.** Confirm that the named path currently contains the freshly downloaded server copy and that the user truly wants previous committed work replaced.
+6. Verify outcomes after acting:
+   - after `sync`, `git log --oneline -3 main` should show the new `SFTP sync:` commit and `worklog today` should show "up to date with main";
+   - after `discard`, `git diff main work -- <path>` should show no content difference for the named file, while the prior development commit should still appear in `git log --all`;
+   - after `commit`, `git log --oneline -1 work` should show the new message.
+7. If a command fails, read the printed hint — every WorkLog error includes its own recovery instruction.
 
 ## 6. Configuration
 
@@ -112,16 +146,22 @@ All keys optional; these are the defaults. Before working in an unfamiliar repo,
 
 TypeScript, Node ≥ 18, ESM (`"type": "module"`, NodeNext resolution — **relative imports need `.js` extensions**). Build with `npm run build`; run from source with `npm run dev -- <command>`; no test suite yet.
 
-```
-src/index.ts             commander program; registers the five commands
-src/commands/*.ts        one module per command; each exports register<Name>Command(program)
-src/git/repo.ts          GitService — the ONLY place that touches simple-git/git
-src/report/generator.ts  buildReport (data) + renderTerminal/renderMarkdown (presentation)
-src/config/config.ts     loadConfig + DEFAULT_CONFIG
-src/utils/logger.ts      log helpers + runAction error wrapper
-src/utils/errors.ts      WorklogError(message, hint)
-src/utils/dates.ts       todayISO, validateDate, dayRange
-src/types/index.ts       CommitInfo, FileChange, ReportData
+```text
+src/index.ts               commander program; registers the six commands
+src/commands/sync.ts       normal SFTP import and merge
+src/commands/commit.ts     development commits on work
+src/commands/discard.ts    authoritative replacement of tracked files
+src/commands/report.ts     daily report command
+src/commands/today.ts      quick repository dashboard
+src/commands/status.ts     detailed repository status
+src/git/repo.ts            GitService — the ONLY place that touches simple-git/git
+src/report/generator.ts    buildReport (data) + renderTerminal/renderMarkdown (presentation)
+src/config/config.ts       loadConfig + DEFAULT_CONFIG
+src/utils/paths.ts         absolute-or-relative input to repo-relative Git path
+src/utils/logger.ts        log helpers + runAction error wrapper
+src/utils/errors.ts        WorklogError(message, hint)
+src/utils/dates.ts         todayISO, validateDate, dayRange
+src/types/index.ts         CommitInfo, FileChange, ReportData
 ```
 
 Conventions when extending:
@@ -135,4 +175,17 @@ Conventions when extending:
 
 ## 8. Quick Self-Test
 
-To verify the tool works without touching the user's real repo: create a throwaway repo with `main` + `work` branches and a committed file, modify the file, run `worklog sync <file>`, and confirm `main` gains an `SFTP sync:` commit and `work` contains it via a merge. Delete the throwaway repo afterwards.
+To verify the tool without touching the user's real repository:
+
+1. Create a throwaway repo with `main` and `work`.
+2. Commit `f.txt` with `server v1` on `main`.
+3. Create `work` and commit an unwanted local change to `f.txt`.
+4. Overwrite the working file with `server v2 downloaded from SFTP`.
+5. Run `worklog discard f.txt`.
+6. Confirm:
+   - the current branch is `work`,
+   - `cat f.txt` shows the downloaded server content,
+   - `git diff main work -- f.txt` prints nothing,
+   - the old unwanted commit still appears in `git log --all`,
+   - the working tree is clean.
+7. Create an untracked `new.txt` and confirm `worklog discard new.txt` exits `1`, leaves it untouched, and directs the user to `worklog sync`.
