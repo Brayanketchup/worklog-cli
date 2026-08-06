@@ -82,6 +82,33 @@ export class GitService {
     const result = await this.git.commit(message);
     return result.commit;
   }
+  /** Commit only the specified paths, leaving unrelated staged files untouched. */
+  async commitPaths(message: string, relPaths: string[]): Promise<string> {
+    const result = await this.git.commit(message, relPaths);
+    return result.commit;
+  }
+
+  /** Restore paths in both the index and working tree from a Git reference. */
+  async restoreFrom(ref: string, relPaths: string[]): Promise<void> {
+    await this.git.raw(['checkout', ref, '--', ...relPaths]);
+  }
+
+  /** Check whether a path exists in a branch, commit, or other Git reference. */
+  async existsInRef(ref: string, relPath: string): Promise<boolean> {
+    try {
+      const out = await this.git.raw([
+        'ls-tree',
+        '--name-only',
+        ref,
+        '--',
+        relPath,
+      ]);
+
+      return out.trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
 
   async merge(branch: string): Promise<void> {
     await this.git.merge([branch]);
@@ -89,7 +116,7 @@ export class GitService {
 
   /** Reset a path in both index and working tree back to HEAD. */
   async discardChanges(relPath: string): Promise<void> {
-    await this.git.raw(['checkout', 'HEAD', '--', relPath]);
+    await this.restoreFrom('HEAD', [relPath]);
   }
 
   async stashPush(message: string): Promise<void> {

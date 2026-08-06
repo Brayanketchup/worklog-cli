@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { toRepoRelative } from '../utils/paths.js';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import type { Command } from 'commander';
 import chalk from 'chalk';
@@ -149,10 +150,7 @@ async function resolveEntries(files: string[], root: string): Promise<SyncEntry[
   const entries: SyncEntry[] = [];
   for (const file of files) {
     const abs = path.resolve(process.cwd(), file);
-    const rel = path.relative(root, abs).split(path.sep).join('/');
-    if (rel.startsWith('..') || path.isAbsolute(rel)) {
-      throw new WorklogError(`${file} is outside the repository (${root}).`);
-    }
+    const rel = toRepoRelative(file, root);
     let content: Buffer;
     try {
       content = await readFile(abs);
