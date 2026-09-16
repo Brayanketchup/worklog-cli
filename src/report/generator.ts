@@ -8,7 +8,7 @@ import type {
   ReportData,
   ReportSpec,
 } from '../types/index.js';
-import { daysBetween, rangeBounds } from '../utils/dates.js';
+import { rangeBounds } from '../utils/dates.js';
 import { WorklogError } from '../utils/errors.js';
 import { buildAreas } from './group.js';
 import { buildBursts } from './bursts.js';
@@ -128,10 +128,10 @@ function bucketByDay(
     return [{ day, devCommits, syncCommits }];
   }
 
+  // Buckets come from the commits themselves rather than from every date in
+  // the range: empty days are filtered out below anyway, and an open-ended
+  // `--until` would otherwise enumerate decades of them.
   const buckets = new Map<string, DayBucket>();
-  for (const day of daysBetween(spec.since!, spec.until!)) {
-    buckets.set(day, { day, devCommits: [], syncCommits: [] });
-  }
   const ensure = (day: string): DayBucket => {
     let bucket = buckets.get(day);
     if (!bucket) {

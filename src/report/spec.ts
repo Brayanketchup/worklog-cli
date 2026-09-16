@@ -2,6 +2,9 @@ import type { ReportSpec } from '../types/index.js';
 import { WorklogError } from '../utils/errors.js';
 import { shiftDays, todayISO, validateDate } from '../utils/dates.js';
 
+/** Open lower bound for `--until` with no `--since`; predates any real repo. */
+const EARLIEST = '1970-01-01';
+
 export interface SpecInput {
   date?: string;
   since?: string;
@@ -45,12 +48,16 @@ export function resolveSpec(input: SpecInput): ReportSpec {
   }
 
   if (input.since || input.until) {
-    const since = input.since ? validateDate(input.since) : validateDate(input.until!);
+    // `--until X` on its own means everything up to X, not just that one day.
+    // Git has no earliest-commit date to hand, so the open end is a date far
+    // enough back to cover any repository's history.
+    const since = input.since ? validateDate(input.since) : EARLIEST;
     const until = input.until ? validateDate(input.until) : todayISO();
     if (since > until) {
       throw new WorklogError(`--since ${since} is after --until ${until}.`);
     }
-    return { kind: 'range', since, until, label: `${since} .. ${until}` };
+    const label = input.since ? `${since} .. ${until}` : `up to ${until}`;
+    return { kind: 'range', since, until, label };
   }
 
   const day = input.date ? validateDate(input.date) : todayISO();
