@@ -7,7 +7,13 @@ import { loadConfig } from '../config/config.js';
 import { GitService } from '../git/repo.js';
 import { reportConflict } from '../safety/conflict.js';
 import { acquireLock } from '../safety/lock.js';
-import { createSafepoint, pinStash, stageIncoming, updateJournal } from '../safety/safepoint.js';
+import {
+  createSafepoint,
+  incomingDir,
+  pinStash,
+  stageIncoming,
+  updateJournal,
+} from '../safety/safepoint.js';
 import { WorklogError } from '../utils/errors.js';
 import { log, runAction } from '../utils/logger.js';
 import { toRepoRelative } from '../utils/paths.js';
@@ -106,41 +112,43 @@ async function discardAction(files: string[], options: DiscardOptions): Promise<
   const lock = await acquireLock(git, 'discard');
   const safepoint = await createSafepoint(git, config, 'discard');
 
-  /*
-   * Keep the downloaded bytes inside .git before the working tree is touched:
-   * between the restore below and the write onto main they would otherwise
-   * exist only in memory.
-   */
-  await stageIncoming(git, safepoint, entries);
-
-  /*
-   * The current files are the newly downloaded server copies. Their bytes
-   * are already stored in memory, so restore the work-tree paths before
-   * switching branches.
-   */
-  for (const entry of entries) {
-    await git.discardChanges(entry.rel);
-  }
-
-  /*
-   * Preserve unrelated in-progress work. The downloaded target files were
-   * restored above, so they will not be included in this stash.
-   */
   let stashed = false;
   let conflictReported = false;
+  const switchSpinner = ora(`Switching to ${config.mainBranch}`);
 
-  if (await git.isDirty()) {
-    const stashSpinner = ora('Stashing unrelated uncommitted changes').start();
-    await git.stashPush('worklog: auto-stash before discard');
-    stashed = true;
-    const hash = await git.resolve('refs/stash');
-    if (hash) await pinStash(git, safepoint, hash);
-    stashSpinner.succeed('Stashed unrelated uncommitted changes');
-  }
-
-  const switchSpinner = ora(`Switching to ${config.mainBranch}`).start();
-
+  // Everything that touches the repository lives inside this try, so a failure
+  // anywhere still releases the lock and still reports where the downloads are.
   try {
+    /*
+     * Keep the downloaded bytes inside .git before the working tree is touched:
+     * between the restore below and the write onto main they would otherwise
+     * exist only in memory.
+     */
+    await stageIncoming(git, safepoint, entries);
+
+    /*
+     * The current files are the newly downloaded server copies. Their bytes
+     * are already stored in memory, so restore the work-tree paths before
+     * switching branches.
+     */
+    for (const entry of entries) {
+      await git.discardChanges(entry.rel);
+    }
+
+    /*
+     * Preserve unrelated in-progress work. The downloaded target files were
+     * restored above, so they will not be included in this stash.
+     */
+    if (await git.isDirty()) {
+      const stashSpinner = ora('Stashing unrelated uncommitted changes').start();
+      await git.stashPush('worklog: auto-stash before discard');
+      stashed = true;
+      const hash = await git.resolve('refs/stash');
+      if (hash) await pinStash(git, safepoint, hash);
+      stashSpinner.succeed('Stashed unrelated uncommitted changes');
+    }
+
+    switchSpinner.start();
     await git.checkout(config.mainBranch);
     switchSpinner.succeed(`Switched to ${config.mainBranch}`);
 
@@ -283,8 +291,39 @@ async function discardAction(files: string[], options: DiscardOptions): Promise<
   } catch (error) {
     switchSpinner.isSpinning && switchSpinner.fail();
 
-    if (!conflictReported && stashed) {
-      log.warn('Your unrelated changes are stashed — run "git stash pop" to recover them.');
+    if (!conflictReported) {
+      // The downloaded copies were restored away from the working tree early
+      // on, so say where the only remaining copy of them lives.
+      try {
+        const dir = await incomingDir(git, safepoint.id);
+        log.plain('');
+        log.warn(`The ${entries.length} downloaded file(s) were not applied, but they are not lost:`);
+        log.dim(`  ${dir}`);
+        log.dim('  Copy them back into place and run worklog discard again.');
+      } catch {
+        // Reporting the rescue path must never mask the original failure.
+      }
+
+      // Do not strand the user on the snapshot branch mid-operation.
+      try {
+        const current = await git.currentBranchOrNull();
+        if (current === config.mainBranch && current !== config.workBranch) {
+          await git.checkout(config.workBranch);
+          log.info(`Returned to ${config.workBranch}`);
+        }
+      } catch {
+        log.warn(`Could not return to ${config.workBranch} — run "git checkout ${config.workBranch}".`);
+      }
+
+      if (stashed) {
+        try {
+          await git.stashPop();
+          stashed = false;
+          log.success('Restored unrelated stashed changes');
+        } catch {
+          log.warn('Your unrelated changes are stashed — run "worklog doctor --pop-stash".');
+        }
+      }
     }
     await updateJournal(git, safepoint, { status: 'failed', note: (error as Error).message });
 

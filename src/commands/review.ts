@@ -139,9 +139,12 @@ function renderReview(facts: PathFacts[]): void {
     }
 
     const dir = list[0]!.path.split('/').slice(0, -1).join('/');
+    const quoted = dir.includes(' ') ? `"${dir}"` : dir;
     log.plain('');
-    log.plain(`    ${chalk.dim('If you downloaded these:')}  worklog sync ${dir}/<file> …`);
-    log.plain(`    ${chalk.dim('If this is your work:   ')}  worklog commit --dir ${dir} -m "<message>"`);
+    log.plain(`    ${chalk.dim('If you downloaded these:')}  worklog sync ${quoted}/<file> …`);
+    log.plain(
+      `    ${chalk.dim('If this is your work:   ')}  worklog commit --dir ${quoted} -m "<message>"`,
+    );
   }
 
   // One advisory line, deliberately not a machine-readable verdict: a file the

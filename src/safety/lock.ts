@@ -52,9 +52,14 @@ export async function readLock(
   } catch {
     return { file: { pid: 0, command: 'unknown', startedAt: '' }, stale: true };
   }
+  // A dead owner is the reliable signal, so it alone makes a lock stale. The
+  // age cutoff is the fallback for the case that signal cannot be trusted:
+  // Windows reuses PIDs, so a live PID that has held the lock for hours is far
+  // more likely to be a recycled number than a worklog command still running.
   const age = Date.now() - Date.parse(file.startedAt || '');
-  const stale = !processAlive(file.pid) && (Number.isNaN(age) || age > STALE_AFTER_MS);
-  return { file, stale };
+  const ownerGone = !processAlive(file.pid);
+  const tooOld = !Number.isNaN(age) && age > STALE_AFTER_MS;
+  return { file, stale: ownerGone || tooOld };
 }
 
 export async function clearLock(git: GitService): Promise<void> {

@@ -146,17 +146,33 @@ async function doctorAction(options: DoctorOptions): Promise<void> {
     });
   }
 
+  // A run that was killed still says "running"; one that threw says "failed".
+  // Both may hold downloaded bytes that never reached a branch, so both are
+  // reported — that captured copy is the only one left once sync has taken the
+  // file out of the working tree.
   const journal = await readJournal(git);
-  const interrupted = journal.filter((e) => e.status === 'running' && e.pid !== process.pid);
-  for (const entry of interrupted) {
+  const unfinished = journal.filter(
+    (e) =>
+      (e.status === 'running' && e.pid !== process.pid) ||
+      (e.status === 'failed' && e.incoming.length > 0),
+  );
+  for (const entry of unfinished) {
+    const interrupted = entry.status === 'running';
     findings.push({
-      severity: 'warning',
-      title: `A "${entry.command}" run never finished`,
+      severity: entry.incoming.length > 0 ? 'warning' : 'info',
+      title: interrupted
+        ? `A "${entry.command}" run never finished`
+        : `A "${entry.command}" run failed with files still captured`,
       detail: [
         `Started ${entry.startedAt}.`,
         `Everything from before it is pinned at ${REF_ROOT}/undo/${entry.id}/`,
         ...(entry.incoming.length > 0
-          ? [`${entry.incoming.length} captured file(s) are kept in .git/worklog/incoming/${entry.id}/`]
+          ? [
+              `${entry.incoming.length} downloaded file(s) are kept in .git/worklog/incoming/${entry.id}/:`,
+              ...entry.incoming.slice(0, 5).map((p) => `  • ${p}`),
+              ...(entry.incoming.length > 5 ? [`  … and ${entry.incoming.length - 5} more`] : []),
+              'Copy them back into place and re-run, or delete that folder once you are done.',
+            ]
           : []),
       ],
     });

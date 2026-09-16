@@ -9,7 +9,13 @@ import { WorklogError } from '../utils/errors.js';
 import { log, runAction } from '../utils/logger.js';
 import { reportConflict } from '../safety/conflict.js';
 import { acquireLock } from '../safety/lock.js';
-import { createSafepoint, pinStash, stageIncoming, updateJournal } from '../safety/safepoint.js';
+import {
+  createSafepoint,
+  incomingDir,
+  pinStash,
+  stageIncoming,
+  updateJournal,
+} from '../safety/safepoint.js';
 import { applyPrefix, buildBody, buildSubject } from '../sync/message.js';
 import { resolveExplicitPaths, walkDropFolder, type SyncEntry } from '../sync/resolve.js';
 
@@ -268,13 +274,50 @@ async function syncAction(files: string[], options: SyncOptions): Promise<void> 
     if (skipped.length > 0) parts.push(`${skipped.length} already up to date`);
     log.success(`Sync complete: ${parts.join(', ')}, merged into ${config.workBranch}.`);
   } catch (err) {
-    if (!conflictReported && stashed) {
-      log.warn('Your uncommitted changes are stashed — run "git stash pop" to recover them.');
+    if (!conflictReported) {
+      // The downloads were taken out of the working tree (and out of the drop
+      // folder) early on, so say plainly where the only remaining copy lives.
+      await reportIncoming(git, safepoint.id, entries.length);
+
+      // Do not strand the user on the snapshot branch mid-operation.
+      try {
+        const current = await git.currentBranchOrNull();
+        if (current === config.mainBranch && current !== previousBranch) {
+          await git.checkout(previousBranch);
+          log.info(`Returned to ${previousBranch}`);
+        }
+      } catch {
+        log.warn(`Could not return to ${previousBranch} — run "git checkout ${previousBranch}".`);
+      }
+
+      if (stashed) {
+        try {
+          await git.stashPop();
+          stashed = false;
+          log.success('Restored stashed changes');
+        } catch {
+          log.warn('Your uncommitted changes are stashed — run "worklog doctor --pop-stash".');
+        }
+      }
     }
     await updateJournal(git, safepoint, { status: 'failed', note: (err as Error).message });
     throw err;
   } finally {
     await lock.release();
+  }
+}
+
+/** Point at the captured downloads after a failure, so nothing looks lost. */
+async function reportIncoming(git: GitService, id: string, count: number): Promise<void> {
+  if (count === 0) return;
+  try {
+    const dir = await incomingDir(git, id);
+    log.plain('');
+    log.warn(`The ${count} downloaded file(s) were not imported, but they are not lost:`);
+    log.dim(`  ${dir}`);
+    log.dim('  Copy them back into place (or into a drop folder) and run worklog sync again.');
+  } catch {
+    // Reporting the rescue path must never mask the original failure.
   }
 }
 

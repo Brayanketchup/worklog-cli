@@ -1,4 +1,4 @@
-import { access, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Command } from 'commander';
 import { loadConfig, type WorklogConfig } from '../config/config.js';
@@ -30,7 +30,6 @@ export interface ReportOptions {
   format?: string;
   markdown?: boolean;
   output?: string;
-  force?: boolean;
 }
 
 export function registerReportCommand(program: Command): void {
@@ -52,7 +51,6 @@ export function registerReportCommand(program: Command): void {
     .option('--format <fmt>', 'terminal, markdown, json or standup')
     .option('--markdown', 'alias for --format markdown')
     .option('-o, --output <file>', 'write the report to a file (.md, .txt or .json)')
-    .option('--force', 'allow -o to overwrite, or to write inside the repository')
     .action(runAction(reportAction));
 }
 
@@ -106,7 +104,7 @@ async function reportAction(options: ReportOptions): Promise<void> {
           : renderTerminal(data, opts);
 
   if (options.output) {
-    const target = await safeOutputPath(options.output, root, git, Boolean(options.force));
+    const target = await safeOutputPath(options.output, root, git);
     const body = format === 'terminal' ? renderMarkdown(data, opts) : text;
     await writeFile(target, body, 'utf8');
     log.success(`Report written to ${target}`);
@@ -147,12 +145,7 @@ function intOption(raw: string | undefined, fallback: number, flag: string): num
  * report accidentally written over a source file would be uploaded to the
  * server. A tracked file is therefore never a valid target, with no override.
  */
-async function safeOutputPath(
-  output: string,
-  root: string,
-  git: GitService,
-  force: boolean,
-): Promise<string> {
+async function safeOutputPath(output: string, root: string, git: GitService): Promise<string> {
   const target = path.resolve(process.cwd(), output);
   const ext = path.extname(target).toLowerCase();
   if (!['.md', '.txt', '.json'].includes(ext)) {
@@ -165,27 +158,21 @@ async function safeOutputPath(
   const rel = path.relative(root, target).split(path.sep).join('/');
   const insideRepo = !rel.startsWith('..') && !path.isAbsolute(rel);
 
+  // The one hard rule: never write over a file git is tracking. This working
+  // tree is the deploy payload, so a report landing on a source file would be
+  // uploaded to the server. There is no --force for this.
   if (insideRepo && (await git.isTracked(rel))) {
     throw new WorklogError(
       `${rel} is a tracked file in this repository.`,
       'Reports must never overwrite source: this working tree is what gets deployed.',
     );
   }
-  if (insideRepo && !force) {
-    throw new WorklogError(
-      `${rel} is inside the repository, where it could be committed and deployed.`,
-      'Write it outside the repo, or pass --force if you are sure.',
-    );
-  }
 
-  if (!force) {
-    try {
-      await access(target);
-      throw new WorklogError(`${output} already exists.`, 'Pass --force to overwrite it.');
-    } catch (err) {
-      if (err instanceof WorklogError) throw err;
-      // Does not exist, which is what we want.
-    }
+  // Writing an untracked report inside the repo is allowed — a reports/ folder
+  // in the repo is a documented habit — but it is worth saying out loud, since
+  // an untracked file here can still be swept up by "worklog commit --all".
+  if (insideRepo) {
+    log.warn(`${rel} is inside the repository; it could be committed by "commit --all".`);
   }
 
   return target;
