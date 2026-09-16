@@ -18,8 +18,36 @@ export function validateDate(value: string): string {
 
 /** Boundaries for filtering a git log to a single local day. */
 export function dayRange(date: string): { since: string; until: string } {
+  return rangeBounds(date, date);
+}
+
+/** Boundaries for filtering a git log to an inclusive span of local days. */
+export function rangeBounds(since: string, until: string): { since: string; until: string } {
   return {
-    since: `${date} 00:00:00`,
-    until: `${date} 23:59:59`,
+    since: `${since} 00:00:00`,
+    until: `${until} 23:59:59`,
   };
+}
+
+/** Move a YYYY-MM-DD date by a whole number of days, staying calendar-correct. */
+export function shiftDays(date: string, delta: number): string {
+  const [y = '1970', m = '01', d = '01'] = date.split('-');
+  const shifted = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d) + delta));
+  const yy = shifted.getUTCFullYear();
+  const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(shifted.getUTCDate()).padStart(2, '0');
+  return `${yy}-${mm}-${dd}`;
+}
+
+/** Every calendar day from `since` to `until`, inclusive. */
+export function daysBetween(since: string, until: string): string[] {
+  const days: string[] = [];
+  let cursor = since;
+  let guard = 0;
+  while (cursor <= until && guard < 4000) {
+    days.push(cursor);
+    cursor = shiftDays(cursor, 1);
+    guard += 1;
+  }
+  return days;
 }
