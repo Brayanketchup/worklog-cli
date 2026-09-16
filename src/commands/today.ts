@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import { loadConfig } from '../config/config.js';
 import { GitService } from '../git/repo.js';
 import { buildReport } from '../report/generator.js';
+import { resolveSpec } from '../report/spec.js';
 import { todayISO } from '../utils/dates.js';
 import { log, runAction } from '../utils/logger.js';
 
@@ -60,10 +61,23 @@ async function todayAction(): Promise<void> {
       }`,
     );
 
-    const report = await buildReport(git, config, todayISO());
+    const report = await buildReport(git, config, resolveSpec({ date: todayISO() }));
     log.plain(
       `  Today so far:  ${report.devCommits.length} dev commit${report.devCommits.length === 1 ? '' : 's'}, ${report.productionImports.length} import${report.productionImports.length === 1 ? '' : 's'}`,
     );
+
+    // Anything that needs a decision gets named here rather than left to be
+    // discovered later, when the cause is no longer obvious.
+    const merge = await git.mergeState();
+    const strandedStashes = (await git.stashListDetailed()).filter((s) =>
+      s.subject.includes('worklog: auto-stash'),
+    );
+    if (merge.inProgress || strandedStashes.length > 0) {
+      log.plain('');
+      if (merge.inProgress) log.warn('A merge is unfinished in this repository.');
+      if (strandedStashes.length > 0) log.warn('worklog left a stash behind.');
+      log.dim('  Run "worklog doctor" for the details and the way out.');
+    }
   } else {
     log.warn(
       `Branches "${config.mainBranch}"/"${config.workBranch}" not found — sync status unavailable.`,
