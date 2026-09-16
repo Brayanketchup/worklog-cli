@@ -138,13 +138,15 @@ async function syncAction(files: string[], options: SyncOptions): Promise<void> 
 
     // Take the download out of the tree so it cannot collide with the stash,
     // and so the merge can bring the same path back without a conflict.
+    //
+    // Only in-tree downloads need this. A drop folder sits outside the
+    // repository, so it cannot collide with anything — emptying it now would
+    // mean a later failure (a read-only destination, a locked file) left the
+    // user with nothing where they put their download.
     for (const entry of entries) {
-      if (entry.source === entry.abs) {
-        if (await git.isTracked(entry.rel)) await git.discardChanges(entry.rel);
-        else await rm(entry.abs, { force: true });
-      } else {
-        await rm(entry.source, { force: true });
-      }
+      if (entry.source !== entry.abs) continue;
+      if (await git.isTracked(entry.rel)) await git.discardChanges(entry.rel);
+      else await rm(entry.abs, { force: true });
     }
 
     if (await git.isDirty()) {
@@ -265,6 +267,14 @@ async function syncAction(files: string[], options: SyncOptions): Promise<void> 
       } catch {
         log.warn('Could not automatically restore the stash — recover it with "git stash pop".');
       }
+    }
+
+    // The import is complete, so the drop folder can be cleared. This happens
+    // last — after any stash pop, which would otherwise restore a drop file
+    // deleted earlier — so a failure anywhere above leaves the downloads
+    // exactly where the user put them.
+    for (const entry of entries) {
+      if (entry.source !== entry.abs) await rm(entry.source, { force: true });
     }
 
     await updateJournal(git, safepoint, { status: 'ok' });
