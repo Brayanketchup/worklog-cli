@@ -1,7 +1,13 @@
 import chalk from 'chalk';
 import type { ReportData } from '../../types/index.js';
-import { rollUp } from '../group.js';
-import { burstSummary, excludedNote, lineStats, statsHint, type RenderOptions } from './shared.js';
+import {
+  burstSummary,
+  excludedNote,
+  flattenAreaFiles,
+  lineStats,
+  statsHint,
+  type RenderOptions,
+} from './shared.js';
 
 /** Render a report for the terminal. Files are always bullets. */
 export function renderTerminal(data: ReportData, opts: RenderOptions): string {
@@ -24,13 +30,8 @@ export function renderTerminal(data: ReportData, opts: RenderOptions): string {
   push(chalk.bold('Files Modified'));
   if (data.filesModified.length === 0) push(chalk.dim('  (none)'));
   else if (opts.group === 'dir') {
-    for (const area of rollUp(data.areas, 12)) {
-      if (area.files.length === 0) continue;
-      push(`  ${chalk.cyan(area.key)}`);
-      for (const file of area.files) {
-        const name = file.path.split('/').pop() ?? file.path;
-        push(`    ${chalk.dim('•')} ${name}${opts.stats ? chalk.dim(` (${lineStats(file)})`) : ''}`);
-      }
+    for (const file of flattenAreaFiles(data.areas)) {
+      push(`  ${chalk.dim('•')} ${chalk.cyan(file.path)}${opts.stats ? chalk.dim(` (${lineStats(file)})`) : ''}`);
     }
   } else {
     for (const file of data.filesModified) {

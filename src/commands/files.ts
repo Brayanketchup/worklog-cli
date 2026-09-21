@@ -2,8 +2,7 @@ import type { Command } from 'commander';
 import chalk from 'chalk';
 import { loadConfig } from '../config/config.js';
 import { GitService } from '../git/repo.js';
-import { rollUp } from '../report/group.js';
-import { lineStats } from '../report/render/shared.js';
+import { flattenAreaFiles, lineStats } from '../report/render/shared.js';
 import { log, runAction } from '../utils/logger.js';
 import { loadReport, renderOptions, type ReportOptions } from './report.js';
 
@@ -47,16 +46,10 @@ async function filesAction(options: ReportOptions & { paths?: boolean }): Promis
   }
 
   if (opts.group === 'dir') {
-    for (const area of rollUp(data.areas, 12)) {
-      if (area.files.length === 0) continue;
-      log.plain('');
-      log.plain(`  ${chalk.cyan(area.key)}`);
-      for (const file of area.files) {
-        const name = file.path.split('/').pop() ?? file.path;
-        const stats = opts.stats ? chalk.dim(` (${lineStats(file)})`) : '';
-        const where = file.commits?.length ? chalk.dim(` [${file.commits.join(', ')}]`) : '';
-        log.plain(`    ${chalk.dim('•')} ${name}${stats}${where}`);
-      }
+    for (const file of flattenAreaFiles(data.areas)) {
+      const stats = opts.stats ? chalk.dim(` (${lineStats(file)})`) : '';
+      const where = file.commits?.length ? chalk.dim(` [${file.commits.join(', ')}]`) : '';
+      log.plain(`  ${chalk.dim('•')} ${chalk.cyan(file.path)}${stats}${where}`);
     }
   } else {
     for (const file of data.filesModified) {

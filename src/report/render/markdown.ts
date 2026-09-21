@@ -1,6 +1,12 @@
 import type { ReportData } from '../../types/index.js';
-import { rollUp } from '../group.js';
-import { burstSummary, excludedNote, lineStats, statsHint, type RenderOptions } from './shared.js';
+import {
+  burstSummary,
+  excludedNote,
+  flattenAreaFiles,
+  lineStats,
+  statsHint,
+  type RenderOptions,
+} from './shared.js';
 
 /** Render a report as Markdown. Files are always bullets. */
 export function renderMarkdown(data: ReportData, opts: RenderOptions): string {
@@ -27,15 +33,8 @@ export function renderMarkdown(data: ReportData, opts: RenderOptions): string {
   push('');
   if (data.filesModified.length === 0) push('_(none)_');
   else if (opts.group === 'dir') {
-    for (const area of rollUp(data.areas, 12)) {
-      if (area.files.length === 0) continue;
-      push(`**${area.key}**`);
-      push('');
-      for (const file of area.files) {
-        const name = file.path.split('/').pop() ?? file.path;
-        push(`- \`${name}\`${opts.stats ? ` (${lineStats(file)})` : ''}`);
-      }
-      push('');
+    for (const file of flattenAreaFiles(data.areas)) {
+      push(`- \`${file.path}\`${opts.stats ? ` (${lineStats(file)})` : ''}`);
     }
   } else {
     for (const file of data.filesModified) {

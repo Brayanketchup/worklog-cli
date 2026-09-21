@@ -1,4 +1,5 @@
-import type { FileChange, ReportData } from '../../types/index.js';
+import type { AreaGroup, FileChange, ReportData } from '../../types/index.js';
+import { ROOT_KEY } from '../group.js';
 
 export interface RenderOptions {
   /** Show the +N -M counts next to each file. Hidden unless asked for. */
@@ -10,6 +11,11 @@ export interface RenderOptions {
 }
 
 export const DEFAULT_RENDER: RenderOptions = { stats: false, code: false, group: 'dir' };
+
+/** A group heading: the real directory with a trailing slash, so it reads as a path. */
+export function areaLabel(area: AreaGroup): string {
+  return area.key === ROOT_KEY ? area.key : `${area.key}/`;
+}
 
 export function lineStats(file: FileChange): string {
   if (file.binary) return 'binary';
@@ -40,4 +46,14 @@ export function burstSummary(data: ReportData): string | null {
 
 function time(stamp: string): string {
   return stamp.split(' ')[1] ?? stamp;
+}
+
+/**
+ * Every changed file as one full repo-relative path, in the order the areas
+ * already establish: website first, then directory, then filename. A heading
+ * plus a basename made the reader rebuild the path in their head; the path is
+ * what they paste into an SFTP client, so the path is what gets printed.
+ */
+export function flattenAreaFiles(areas: AreaGroup[]): FileChange[] {
+  return areas.flatMap((area) => area.files);
 }
