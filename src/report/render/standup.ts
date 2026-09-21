@@ -1,5 +1,5 @@
 import type { ReportData } from '../../types/index.js';
-import { rollUp } from '../group.js';
+import { rollUp, shortLabel } from '../group.js';
 
 /**
  * A short block to paste into a standup note or a timesheet comment.
@@ -21,7 +21,7 @@ export function renderStandup(data: ReportData): string {
       const extra = area.commits.length - shown.length;
       const tail = extra > 0 ? ` (+${extra} more)` : '';
       lines.push(
-        `  ${area.key}: ${area.commits.length} commit${
+        `  ${shortLabel(area.key)}: ${area.commits.length} commit${
           area.commits.length === 1 ? '' : 's'
         } — ${shown.join('; ')}${tail}`,
       );

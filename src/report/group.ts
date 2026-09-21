@@ -1,24 +1,51 @@
 import type { AreaGroup, CommitInfo, FileChange } from '../types/index.js';
 
 /**
- * The area a file belongs to: its real directory, never anything inferred.
+ * The area a file belongs to: its real directory, exactly as it sits on disk
+ * and on the server.
  *
- * Only two segments are folded away — the vhost, because every path in these
- * repositories starts with one, and the `up/` that every vhost repeats. What
- * remains is the actual directory, so `lib/requires` and `lib/modules` stay
- * distinct areas instead of collapsing into a single misleading bucket.
+ * Nothing is folded away and nothing is invented. The first segment is the
+ * vhost when it looks like one, so reports can be read website by website,
+ * but it stays in the key — `uniprouniforms.com/up/lib/modules` is the path a
+ * reader can paste into an SFTP client, which `lib/modules` was not. Files
+ * sitting directly in the repo root get an empty directory rather than a
+ * placeholder like `(root)`.
  */
 export function areaKey(filePath: string): { key: string; host: string; dir: string } {
   const segs = filePath.split('/').filter(Boolean);
-  let host = '(repo)';
+  let host = '';
   const first = segs[0] ?? '';
   if (/\.(com|net|org)$/.test(first) || first === 'globalTools') {
     host = first;
     segs.shift();
   }
-  if (segs[0] === 'up') segs.shift();
-  const dir = segs.slice(0, -1).join('/') || '(root)';
-  return { key: `${host}/${dir}`, host, dir };
+  const dir = segs.slice(0, -1).join('/');
+  const key = [host, dir].filter(Boolean).join('/');
+  return { key: key || ROOT_KEY, host, dir };
+}
+
+/** What a file sitting directly in the repository root is filed under. */
+export const ROOT_KEY = 'repository root';
+
+/**
+ * A shortened form of a key, for places that need a headline rather than a
+ * path — the standup block, where a full path per line would bury the commit
+ * subjects it exists to show.
+ */
+export function shortLabel(key: string, maxSegments = 3): string {
+  const segs = key.split('/').filter(Boolean);
+  if (segs.length <= maxSegments) return key;
+  return `${segs[0]}/…/${segs.slice(-(maxSegments - 1)).join('/')}`;
+}
+
+/**
+ * Sort areas by website, then by directory, both alphabetically. Paths with no
+ * vhost — repo-level notes, shared tool folders — sort after the websites
+ * rather than jumping to the top on an empty host string.
+ */
+function byPath(a: AreaGroup, b: AreaGroup): number {
+  if (!a.host !== !b.host) return a.host ? -1 : 1;
+  return a.host.localeCompare(b.host) || a.dir.localeCompare(b.dir) || a.key.localeCompare(b.key);
 }
 
 /** Group commits and files by the directory the work actually happened in. */
@@ -51,14 +78,18 @@ export function buildAreas(commits: CommitInfo[], files: FileChange[]): AreaGrou
     if (first) ensure(first.path).commits.push(commit);
   }
 
-  return [...areas.values()].sort(
-    (a, b) => b.commits.length - a.commits.length || a.key.localeCompare(b.key),
-  );
+  for (const area of areas.values()) {
+    area.files.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  return [...areas.values()].sort(byPath);
 }
 
 /**
  * Collapse the deepest path segment until the list fits. Purely a display
- * concern, applied after grouping, so the underlying data stays truthful.
+ * concern for summaries that must stay short; the file listings do not use it,
+ * because merging `lib/modules` into `lib` would report a directory the work
+ * never touched.
  */
 export function rollUp(areas: AreaGroup[], max: number): AreaGroup[] {
   let current = areas;
@@ -68,13 +99,13 @@ export function rollUp(areas: AreaGroup[], max: number): AreaGroup[] {
     const merged = new Map<string, AreaGroup>();
     let changed = false;
     for (const area of current) {
-      const parts = area.dir === '(root)' ? [] : area.dir.split('/');
+      const parts = area.dir ? area.dir.split('/') : [];
       if (parts.length > 1) {
         parts.pop();
         changed = true;
       }
-      const dir = parts.join('/') || '(root)';
-      const key = `${area.host}/${dir}`;
+      const dir = parts.join('/');
+      const key = [area.host, dir].filter(Boolean).join('/') || ROOT_KEY;
       const existing = merged.get(key);
       if (existing) {
         existing.commits.push(...area.commits);
@@ -84,9 +115,7 @@ export function rollUp(areas: AreaGroup[], max: number): AreaGroup[] {
       }
     }
     if (!changed) break;
-    current = [...merged.values()].sort(
-      (a, b) => b.commits.length - a.commits.length || a.key.localeCompare(b.key),
-    );
+    current = [...merged.values()].sort(byPath);
   }
   return current;
 }
